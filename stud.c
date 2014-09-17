@@ -556,6 +556,55 @@ RSA *load_rsa_privatekey(SSL_CTX *ctx, const char *file) {
 
 #ifndef OPENSSL_NO_TLSEXT
 /*
+ * Match a URL/URI hostname against a single certificate DNS name
+ * using RFC 6125 rules (6.4.3 Checking of Wildcard Certificates):
+ *
+ *   1.  The client SHOULD NOT attempt to match a presented identifier in
+ *       which the wildcard character comprises a label other than the
+ *       left-most label (e.g., do not match bar.*.example.net).
+ *
+ *   2.  If the wildcard character is the only character of the left-most
+ *       label in the presented identifier, the client SHOULD NOT compare
+ *       against anything but the left-most label of the reference
+ *       identifier (e.g., *.example.com would match foo.example.com but
+ *       not bar.foo.example.com or example.com).
+ *
+ *   3.  The client MAY match a presented identifier in which the wildcard
+ *       character is not the only character of the label (e.g.,
+ *       baz*.example.net and *baz.example.net and b*z.example.net would
+ *       be taken to match baz1.example.net and foobaz.example.net and
+ *       buzz.example.net, respectively).  However, the client SHOULD NOT
+ *       attempt to match a presented identifier where the wildcard
+ *       character is embedded within an A-label or U-label [IDNA-DEFS] of
+ *       an internationalized domain name [IDNA-PROTO].
+ *
+ * The optional partial matching in rule 3 is not implemented.
+ * Returns 1 on match, 0 on no match.
+ */
+int ssl_dnsname_match(const char *certname, size_t certnamesz,
+                  const char *hostname, size_t hostnamesz)
+{
+  if (hostnamesz < certnamesz)
+    return 0;
+  if ((hostnamesz == certnamesz) &&
+      !memcmp(certname, hostname, certnamesz))
+    return 1;
+  if (!memcmp(certname, "xn--", 4))
+    return 0;
+  if ((certnamesz == 1) && (certname[0] == '*') &&
+      !memchr(hostname, '.', hostnamesz))
+    return 1;
+  if ((certnamesz > 2) && (certname[0] == '*') && (certname[1] == '.') &&
+      !memcmp(&certname[1],
+              &hostname[hostnamesz - (certnamesz - 1)],
+              certnamesz - 1) &&
+      (memchr(hostname, '.', hostnamesz) ==
+       &hostname[hostnamesz - (certnamesz - 1)]))
+    return 1;
+  return 0;
+}
+
+/*
  * Switch the context of the current SSL object to the most appropriate one
  * based on the SNI header
  */
@@ -564,14 +613,16 @@ int sni_switch_ctx(SSL *ssl, int *al, void *data) {
     (void)al;
     const char *servername;
     const ctx_list *cl;
+    size_t servernamesz, clservernamesz;
 
     servername = SSL_get_servername(ssl, TLSEXT_NAMETYPE_host_name);
     if (!servername) return SSL_TLSEXT_ERR_NOACK;
 
-    // For now, just compare servernames as case insensitive strings. Someday,
-    // it might be nice to Do The Right Thing around star certs.
     for (cl = sni_ctxs; cl != NULL; cl = cl->next) {
-        if (strcasecmp(servername, cl->servername) == 0) {
+        servernamesz = strlen(servername);
+        clservernamesz = strlen(cl->servername);
+        if (ssl_dnsname_match(cl->servername, clservernamesz,
+                              servername, servernamesz) == 1) {
             SSL_set_SSL_CTX(ssl, cl->ctx);
             return SSL_TLSEXT_ERR_NOACK;
         }

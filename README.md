@@ -176,6 +176,9 @@ server-side TLS termination for over 85 million Bump users.
 Special thanks to Colin Percival (@cperciva) for an early security
 audit and code review.
 
+Thanks to Daniel Roethlisberger who wrote (sslsplit)[https://github.com/droe/sslsplit],
+stud has proper wild-card certificate matching.
+
 Finally, thank you to all the stud contributors, who have taken the
 program from a good start to a solid project:
 
